@@ -1,0 +1,9 @@
+
+CSV Parser for Objective-C.
+
+This is not my code; this comes from the following blog post:
+
+http://cocoawithlove.com/2009/11/writing-parser-using-nsscanner-csv.html
+
+See that author's post for examples.
+
