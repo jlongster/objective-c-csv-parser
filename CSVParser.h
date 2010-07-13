@@ -1,6 +1,9 @@
 //
-//  CSVParser.h
-//  CSVImporter
+//  CSV Parser implementation copied from the following blog post.
+//
+//  http://cocoawithlove.com/2009/11/writing-parser-using-nsscanner-csv.html
+//
+//  ***
 //
 //  Created by Matt Gallagher on 2009/11/30.
 //  Copyright 2009 Matt Gallagher. All rights reserved.
@@ -12,40 +15,28 @@
 //  appreciated but not required.
 //
 
-#import <Cocoa/Cocoa.h>
+#import <Foundation/Foundation.h>
 
-@interface CSVParser : NSObject
-{
-	NSString *csvString;
-	NSString *separator;
-	NSScanner *scanner;
-	BOOL hasHeader;
-	NSMutableArray *fieldNames;
-	id receiver;
-	SEL receiverSelector;
-	NSCharacterSet *endTextCharacterSet;
-	BOOL separatorIsSingleChar;
+@interface CSVParser : NSObject {
+    FILE *file;
+    NSScanner *scanner;
+    NSString *separator;
+    NSMutableArray *fieldNames;
+    NSCharacterSet *endTextCharacterSet;
+    BOOL separatorIsSingleChar;
 }
 
 - (id)initWithString:(NSString *)aCSVString
-    separator:(NSString *)aSeparatorString
-    hasHeader:(BOOL)header
-    fieldNames:(NSArray *)names;
+           separator:(NSString *)aSeparatorString
+           hasHeader:(BOOL)header
+          fieldNames:(NSArray *)names;
 
-- (NSArray *)arrayOfParsedRows;
-- (void)parseRowsForReceiver:(id)aReceiver selector:(SEL)aSelector;
+- (id)initWithFile:(NSString *)filename
+         separator:(NSString *)aSeparatorString
+         hasHeader:(BOOL)header
+        fieldNames:(NSArray *)names;
 
-- (NSArray *)parseFile;
-- (NSMutableArray *)parseHeader;
-- (NSDictionary *)parseRecord;
-- (NSString *)parseName;
-- (NSString *)parseField;
-- (NSString *)parseEscaped;
-- (NSString *)parseNonEscaped;
-- (NSString *)parseDoubleQuote;
-- (NSString *)parseSeparator;
-- (NSString *)parseLineSeparator;
-- (NSString *)parseTwoDoubleQuotes;
-- (NSString *)parseTextData;
+- (NSArray *)rows;
+- (NSDictionary *)nextRow;
 
 @end

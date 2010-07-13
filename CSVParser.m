@@ -1,6 +1,9 @@
 //
-//  CSVParser.m
-//  CSVImporter
+//  CSV Parser implementation copied from the following blog post.
+//
+//  http://cocoawithlove.com/2009/11/writing-parser-using-nsscanner-csv.html
+//
+//  ***
 //
 //  Created by Matt Gallagher on 2009/11/30.
 //  Copyright 2009 Matt Gallagher. All rights reserved.
@@ -14,52 +17,93 @@
 
 #import "CSVParser.h"
 
+@interface CSVParser (PrivateMethods)
+- (NSString *)readLineFromFile;
+- (NSArray *)parseFile;
+- (NSMutableArray *)parseHeader;
+- (NSDictionary *)parseRecord;
+- (NSString *)parseName;
+- (NSString *)parseField;
+- (NSString *)parseEscaped;
+- (NSString *)parseNonEscaped;
+- (NSString *)parseDoubleQuote;
+- (NSString *)parseSeparator;
+- (NSString *)parseLineSeparator;
+- (NSString *)parseTwoDoubleQuotes;
+- (NSString *)parseTextData;
+@end
 
 @implementation CSVParser
 
-//
-// initWithString:separator:hasHeader:fieldNames:
-//
-// Parameters:
-//    aCSVString - the string that will be parsed
-//    aSeparatorString - the separator (normally "," or "\t")
-//    header - if YES, treats the first row as a list of field names
-//    names - a list of field names (will have no effect if header is YES)
-//
-// returns the initialized object (nil on failure)
-//
-- (id)initWithString:(NSString *)aCSVString
+// Private constructor
+
+- (id)init:(NSString *)aSeparatorString
+ hasHeader:(BOOL)header
+fieldNames:(NSArray *)names
+{
+    self = [super init];
+    
+    if (self) {
+        separator = [aSeparatorString retain];
+		
+        NSAssert([separator length] > 0 &&
+                 [separator rangeOfString:@"\""].location == NSNotFound &&
+                 [separator rangeOfCharacterFromSet:[NSCharacterSet newlineCharacterSet]].location == NSNotFound,
+                 @"CSV separator string must not be empty and must not contain the double quote character or newline characters.");
+		
+        NSMutableCharacterSet *endTextMutableCharacterSet =
+            [[NSCharacterSet newlineCharacterSet] mutableCopy];
+        [endTextMutableCharacterSet addCharactersInString:@"\""];
+        [endTextMutableCharacterSet addCharactersInString:[separator substringToIndex:1]];
+        endTextCharacterSet = endTextMutableCharacterSet;
+
+        if ([separator length] == 1) {
+            separatorIsSingleChar = YES;
+        }
+
+        if(fieldNames) {
+            fieldNames = [names retain];
+        }
+        else if(header) {            
+            fieldNames = [[self parseHeader] retain];
+            if (!fieldNames || ![self parseLineSeparator]) {
+                return nil;
+            }
+	}
+
+    }
+    
+    return self;    
+}
+
+// Public constructors
+
+- (id)initWithString:(NSString *)str
     separator:(NSString *)aSeparatorString
     hasHeader:(BOOL)header
     fieldNames:(NSArray *)names
 {
-	self = [super init];
-	if (self)
-	{
-		csvString = [aCSVString retain];
-		separator = [aSeparatorString retain];
-		
-		NSAssert([separator length] > 0 &&
-			[separator rangeOfString:@"\""].location == NSNotFound &&
-			[separator rangeOfCharacterFromSet:[NSCharacterSet newlineCharacterSet]].location == NSNotFound,
-			@"CSV separator string must not be empty and must not contain the double quote character or newline characters.");
-		
-		NSMutableCharacterSet *endTextMutableCharacterSet =
-			[[NSCharacterSet newlineCharacterSet] mutableCopy];
-		[endTextMutableCharacterSet addCharactersInString:@"\""];
-		[endTextMutableCharacterSet addCharactersInString:[separator substringToIndex:1]];
-		endTextCharacterSet = endTextMutableCharacterSet;
+    scanner = [[NSScanner alloc] initWithString:str];
+    [scanner setCharactersToBeSkipped:nil];
 
-		if ([separator length] == 1)
-		{
-			separatorIsSingleChar = YES;
-		}
+    return [self init:aSeparatorString hasHeader:header fieldNames:names];
+}
 
-		hasHeader = header;
-		fieldNames = [names retain];
-	}
-	
-	return self;
+- (id)initWithFile:(NSString *)filename
+         separator:(NSString *)aSeparatorString
+         hasHeader:(BOOL)header
+        fieldNames:(NSArray *)names
+{
+    file = fopen([filename cStringUsingEncoding:NSASCIIStringEncoding], "r");
+
+    NSString *line = [self readLineFromFile];
+    if(!line)
+        line = @"";
+    
+    scanner = [[NSScanner alloc] initWithString:line];
+    [scanner setCharactersToBeSkipped:nil];
+
+    return [self init:aSeparatorString hasHeader:header fieldNames:names];
 }
 
 //
@@ -69,57 +113,69 @@
 //
 - (void)dealloc
 {
-	[csvString release];
-	[separator release];
-	[fieldNames release];
-	[endTextCharacterSet release];
-	[super dealloc];
+    if(scanner)
+        [scanner release];
+    
+    if(file)
+        fclose(file);
+    
+    [separator release];
+    [fieldNames release];
+    [endTextCharacterSet release];
+    [super dealloc];
 }
 
 
 //
-// arrayOfParsedRows
+// rows
 //
-// Performs a parsing of the csvString, returning the entire result.
+// Performs a parsing of the data, returning the entire result.
 //
 // returns the array of all parsed row records
 //
-- (NSArray *)arrayOfParsedRows
+- (NSArray *)rows
 {
-	scanner = [[NSScanner alloc] initWithString:csvString];
-	[scanner setCharactersToBeSkipped:[[[NSCharacterSet alloc] init] autorelease]];
-	
-	NSArray *result = [self parseFile];
-	[scanner release];
-	scanner = nil;
-	
-	return result;
+    return [self parseFile];	
 }
 
 //
-// parseRowsForReceiver:selector:
+// nextRow
 //
-// Performs a parsing of the csvString, sending the entries, 1 row at a time,
-// to the receiver.
+// Returns the next row of data
 //
-// Parameters:
-//    aReceiver - the target that will receive each row as it is parsed
-//    aSelector - the selector that will receive each row as it is parsed
-//		(should be a method that takes a single NSDictionary argument)
-//
-- (void)parseRowsForReceiver:(id)aReceiver selector:(SEL)aSelector
+- (NSDictionary *)nextRow
 {
-	scanner = [[NSScanner alloc] initWithString:csvString];
-	[scanner setCharactersToBeSkipped:[[[NSCharacterSet alloc] init] autorelease]];
-	receiver = [aReceiver retain];
-	receiverSelector = aSelector;
-	
-	[self parseFile];
-	
-	[scanner release];
-	scanner = nil;
-	[receiver release];
-	receiver = nil;
+    NSDictionary *record = [[self parseRecord] retain];
+    [self parseLineSeparator];
+    return record;
+}
+
+//
+// readLineFromFile
+//
+- (NSString *)readLineFromFile
+{
+    char buffer[4096];
+
+    if(!file || feof(file))
+        return nil;
+    
+    NSMutableString *result = [NSMutableString stringWithCapacity:256];
+
+    // Read all the data up to the line ending
+    int charsRead;
+    do
+    {
+        if(fscanf(file, "%4095[^\r\n]%n", buffer, &charsRead) == 1)
+            [result appendFormat:@"%s", buffer];
+        else
+            break;
+    } while(charsRead == 4095);
+
+    // Chop off the line endings
+    fscanf(file, "%*[\r\n]");
+    
+    return result;
 }
 
 //
@@ -127,30 +183,11 @@
 //
 // Attempts to parse a file from the current scan location.
 //
-// returns the parsed results if successful and receiver is nil, otherwise
-//	returns nil when done or on failure.
+// returns the parsed results if successful
 //
 - (NSArray *)parseFile
-{
-	if (hasHeader)
-	{
-		if (fieldNames)
-		{
-			[fieldNames release];
-		}
-		
-		fieldNames = [[self parseHeader] retain];
-		if (!fieldNames || ![self parseLineSeparator])
-		{
-			return nil;
-		}
-	}
-	
-	NSMutableArray *records = nil;
-	if (!receiver)
-	{
-		records = [NSMutableArray array];
-	}
+{	
+	NSMutableArray *records = [NSMutableArray array];
 	
 	NSDictionary *record = [[self parseRecord] retain];
 	if (!record)
@@ -162,14 +199,7 @@
 	{
 		NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 		
-		if (receiver)
-		{
-			[receiver performSelector:receiverSelector withObject:record];
-		}
-		else
-		{
-			[records addObject:record];
-		}
+                [records addObject:record];
 		[record release];
 		
 		if (![self parseLineSeparator])
@@ -197,7 +227,7 @@
 	NSString *name = [self parseName];
 	if (!name)
 	{
-		return nil;
+            return nil;
 	}
 
 	NSMutableArray *names = [NSMutableArray array];
@@ -349,11 +379,11 @@
 				{
 					if ([self parseTwoDoubleQuotes])
 					{
-						fragment = @"\"";
+                                            fragment = @"\"";
 					}
 					else
 					{
-						break;
+                                            break;
 					}
 				}
 			}
@@ -439,11 +469,60 @@
 //
 - (NSString *)parseLineSeparator
 {
+    if(file) {
+        
+        // If we are reading from a file, we basically simulate the
+        // parsing of newlines because this is where we stream more
+        // data in. This is necessary because Objective-C doesn't
+        // properly support streaming data from disk.
+        //
+        // Make sure this line is ended and then read the next line
+        // into memory. This complexity is necessary to support
+        // streaming data from the disk to avoid loading the whole
+        // file into memory.
+        
+        if([scanner isAtEnd]) {
+            NSString *line;
+            NSString *ret = @"\n";
+
+            // Continue reading lines from the file until we hit a
+            // non-blank line. Keep track of the blank lines we
+            // accumulate (only contains newlines).
+            while((line = [self readLineFromFile])) {
+                if(![line isEqualToString:@"\n"]) {
+                    break;
+                }
+                else {
+                    ret = [ret stringByAppendingString:line];
+                }
+            }
+
+            // We won't have a line if we hit the end of file before
+            // finding the next non-blank line. If we have a line,
+            // create a new scanner for this line and return the
+            // accumulated newlines (to properly support multi-line
+            // quoted data)
+            if(line) {
+                [scanner release];
+                scanner = [[NSScanner alloc] initWithString:line];
+                [scanner setCharactersToBeSkipped:nil];
+                return ret;
+            }
+            else {
+                return nil;
+            }
+        }
+        else {
+            return nil;
+        }
+    }
+    else {
 	NSString *matchedNewlines = nil;
 	[scanner
 		scanCharactersFromSet:[NSCharacterSet newlineCharacterSet]
-		intoString:&matchedNewlines];
+                           intoString:&matchedNewlines];
 	return matchedNewlines;
+    }
 }
 
 //
